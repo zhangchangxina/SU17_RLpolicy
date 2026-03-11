@@ -1618,43 +1618,13 @@ class IsaacLabPolicyNode:
             lidar: 米制原始值 [0, lidar_range]，函数内部归一化后用于 barrier
         """
         try:
-            # 构建当前观测 (与 build_observation 一致)
-            with self.lock:
-                quat = self.orientation.copy()
-                position = self.position.copy()
-            
-            # 1. projected_gravity
-            projected_gravity = self._compute_projected_gravity(quat)
-            
-            # 2. base_height (AirSim ROS 已转 ENU，position[2] 即高度)
-            base_height = np.array([position[2]])
-            
-            # 3. 目标相对位置 (机体坐标系) - 与 build_observation 一致
-            dx = self.target_x - position[0]
-            dy = self.target_y - position[1]
-            dz = self.target_z - position[2]
-            diff_world = np.array([dx, dy, dz])
-            diff_body_airsim = self._world_to_body_yaw_only(diff_world, quat)
-            pose_command = np.array([
-                diff_body_airsim[0],   # X: 前
-                -diff_body_airsim[1],  # Y: 左 = -右
-                diff_body_airsim[2]    # Z: 上 = 上 (ENU)
-            ])
-            
-            # 构建完整观测 (与 build_observation 一致)
-            # obs 用原始米制 lidar (与 policy 输入一致)
-            obs = np.concatenate([
-                projected_gravity,  # 3
-                base_height,        # 1
-                pose_command,       # 3
-                self.last_action,   # 4
-                lidar               # 280 (8 channels × 35 horizontal) — 米
-            ]).astype(np.float32)
+            # 直接复用 build_observation() — 永远与 policy 输入一致 (296维)
+            obs = self.build_observation()
             
             # 转换为 tensor
             obs_tensor = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-            # 动作是 4 维: [vx, vy, vz, yaw_rate]
-            action = torch.tensor([vx / self.scale_hor, vy / self.scale_hor, vz / self.scale_z, 0.0], 
+            # 动作是 3 维: [vx, vy, vz] (与 last_action 和 act_dim=3 一致)
+            action = torch.tensor([vx / self.scale_hor, vy / self.scale_hor, vz / self.scale_z], 
                                   dtype=torch.float32, device=self.device).unsqueeze(0)
             
             # BUG-FIX: 归一化 lidar 用于 barrier 计算
@@ -1686,12 +1656,12 @@ class IsaacLabPolicyNode:
                     # 约束满足，退出
                     break
                 
-                # 计算梯度 (数值方法) - 只对前3维速度计算，yaw_rate 保持不变
+                # 计算梯度 (数值方法) - 对3维速度 [vx, vy, vz] 计算
                 eps = 0.01
-                grad = np.zeros(4)  # 4维动作
+                grad = np.zeros(3)  # 3维动作
                 u_np = u.detach().cpu().numpy().squeeze()
                 
-                for i in range(3):  # 只优化 vx, vy, vz，不优化 yaw_rate
+                for i in range(3):  # vx, vy, vz
                     u_plus = u_np.copy()
                     u_plus[i] += eps
                     u_plus_tensor = torch.tensor(u_plus, dtype=torch.float32, device=self.device).unsqueeze(0)
@@ -1752,30 +1722,8 @@ class IsaacLabPolicyNode:
         from scipy.optimize import minimize
         
         try:
-            # 构建当前观测 (与 _apply_mbcbf 一致)
-            with self.lock:
-                quat = self.orientation.copy()
-                position = self.position.copy()
-            
-            projected_gravity = self._compute_projected_gravity(quat)
-            base_height = np.array([position[2]])
-            
-            dx = self.target_x - position[0]
-            dy = self.target_y - position[1]
-            dz = self.target_z - position[2]
-            diff_world = np.array([dx, dy, dz])
-            diff_body_airsim = self._world_to_body_yaw_only(diff_world, quat)
-            pose_command = np.array([
-                diff_body_airsim[0],
-                -diff_body_airsim[1],
-                diff_body_airsim[2]
-            ])
-            
-            # obs 用原始米制 lidar (与 policy 输入一致)
-            obs = np.concatenate([
-                projected_gravity, base_height, pose_command,
-                self.last_action, lidar  # 米
-            ]).astype(np.float32)
+            # 直接复用 build_observation() — 永远与 policy 输入一致 (296维)
+            obs = self.build_observation()
             
             obs_tensor = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
             
@@ -1788,8 +1736,7 @@ class IsaacLabPolicyNode:
             
             # 如果当前已经安全且没有 violation, 直接返回
             # 先用名义动作检查
-            u_nom_4d = np.array([u_nom[0], u_nom[1], u_nom[2], 0.0], dtype=np.float32)
-            u_tensor = torch.tensor(u_nom_4d, dtype=torch.float32, device=self.device).unsqueeze(0)
+            u_tensor = torch.tensor(u_nom.astype(np.float32), dtype=torch.float32, device=self.device).unsqueeze(0)
             with torch.no_grad():
                 pred_state, _, _ = self.dynamics_model(obs_tensor, u_tensor)
             pred_lidar = pred_state[0, -self.lidar_num_rays:].cpu().numpy()
@@ -1811,8 +1758,7 @@ class IsaacLabPolicyNode:
                 key = tuple(np.round(u3, 6))
                 if key in _eval_cache:
                     return _eval_cache[key]
-                u4 = np.array([u3[0], u3[1], u3[2], 0.0], dtype=np.float32)
-                u_t = torch.tensor(u4, dtype=torch.float32, device=self.device).unsqueeze(0)
+                u_t = torch.tensor(u3.astype(np.float32), dtype=torch.float32, device=self.device).unsqueeze(0)
                 with torch.no_grad():
                     pred, _, _ = self.dynamics_model(obs_tensor, u_t)
                 p_lidar = pred[0, -self.lidar_num_rays:].cpu().numpy()
