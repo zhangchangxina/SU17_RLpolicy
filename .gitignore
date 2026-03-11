@@ -1,0 +1,9 @@
+# 飞行日志 (数据量大)
+flight_logs/
+
+# 模型文件 (二进制大文件)
+models/
+
+# Python 缓存
+__pycache__/
+*.pyc
