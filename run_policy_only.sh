@@ -71,7 +71,7 @@ WANDB_ENTITY="zhangchangxin"
 WANDB_PROJECT="UAV_Navigation"
 
 # 参数配置 - 目标点
-TARGET_X=0.0
+TARGET_X=40.0
 TARGET_Y=0.0
 TARGET_Z=1.2
 
@@ -97,7 +97,7 @@ MAX_ACC_DOWN=2.0      # 最大下降加速度 (m/s²) - _UAV_ACC_DOWN
 # CBF 安全参数 (与 run_play_mb.sh 一致)
 # 参考: https://github.com/zhangchangxina/Naci_isaaclab/blob/main/run_play_mb.sh
 # ============================================================
-USE_CBF=true         # 是否启用 CBF 安全层 (CBF_TEST_MODE=true 时自动覆盖)
+USE_CBF=false         # 是否启用 CBF 安全层 (CBF_TEST_MODE=true 时自动覆盖)
 CBF_SAFE_DIST=1.0       # Barrier 函数作用距离 (米), 进入此范围 barrier 值开始升高
 CBF_SOLVER=gradient     # CBF 求解器: gradient=梯度投影(快,不严格), slsqp=严格QP求解(保证约束)
 CBF_BARRIER=reciprocal         # Barrier函数: log=对数(陡), softplus=平滑过渡(推荐), reciprocal=倒数

@@ -737,7 +737,7 @@ class IsaacLabPolicyNode:
                             PointCloud2, self.pointcloud_callback)
             # Livox 雷达 (实机: /livox/lidar 和 /uav1/cloud_mid360_body)
             # rospy.Subscriber(f'/livox/lidar',
-            #                PointCloud2, self.pointcloud_callback)
+            #                 PointCloud2, self.pointcloud_callback)
             rospy.Subscriber(f'/uav1/cloud_mid360_body',
                             PointCloud2, self.pointcloud_callback)
             # Velodyne 雷达
@@ -1194,16 +1194,16 @@ class IsaacLabPolicyNode:
             # AirSim ROS wrapper 已转为 ENU（Z向上为正），position[2] 即高度
             raw_height = self.position[2]
             
-            # 高度观测放大: z > 1m 时，放大为 1 + (z-1)*4，让策略以为自己很高从而降高
-            if raw_height > 1.0:
-                obs_height = 1.0 + (raw_height - 1.0) * 4.0
+            # 高度观测放大: z > 0.5m 时，放大为 0.5 + (z-0.5)*8，让策略以为自己很高从而降高
+            if raw_height > 0.5:
+                obs_height = 0.5 + (raw_height - 0.5) * 8.0
             else:
                 obs_height = raw_height
             base_height = np.array([obs_height])
             
-            # vz 压缩: z > 1m 时，vz 也 /4
-            if raw_height > 1.0:
-                base_lin_vel[2] = base_lin_vel[2] / 4.0
+            # vz 压缩: z > 0.5m 时，vz 也 /8
+            if raw_height > 0.5:
+                base_lin_vel[2] = base_lin_vel[2] / 8.0
             
             # 5. pose_command: 目标位置相对坐标 (机体坐标系)
             # 直接在 AirSim 体系下计算，最后转换轴定义

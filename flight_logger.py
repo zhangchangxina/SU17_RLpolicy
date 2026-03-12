@@ -113,7 +113,8 @@ class FlightLogger:
         # 3D 点云快照 (用于 NPZ) — 所有方法通用 (PointCloud2 原始数据)
         self._pcl_snapshots = []         # [(time, pos_x, pos_y, pos_z, yaw_deg, points_enu_Nx3)]
         self._pcl_frame_counter = 0
-        self._pcl_snapshot_interval = 10  # 每 N 帧保存一次
+        self._pcl_snapshot_interval = 5   # 每 N 帧保存一次 (10Hz下约0.5s/帧)
+        self._pcl_max_points_per_frame = 2000  # 每帧最多保存点数
         self._has_pcl = False
 
         # 记录起始时间 (run() 中初始化)
@@ -162,6 +163,7 @@ class FlightLogger:
             f'/airsim_node/uav{self.uav_id}/lidar/Lidar',
             f'/airsim_node/uav{self.uav_id}/lidarPointCloud2/LidarSensor1',
             f'{self.topic_prefix}/livox/lidar',
+            '/livox/lidar',                                      # 实机 Livox 雷达 (无前缀)
             f'{self.topic_prefix}/velodyne_points',
             f'{self.topic_prefix}/prometheus/scan_point_cloud',
         ]
@@ -381,9 +383,10 @@ class FlightLogger:
 
                     world_pts = np.column_stack([world_x, world_y, world_z])
 
-                    # 降采样 (最多保存 500 点/帧, 减小文件大小)
-                    if len(world_pts) > 500:
-                        idx = np.random.choice(len(world_pts), 500, replace=False)
+                    # 降采样 (限制每帧点数, 减小文件大小)
+                    max_pts = self._pcl_max_points_per_frame
+                    if len(world_pts) > max_pts:
+                        idx = np.random.choice(len(world_pts), max_pts, replace=False)
                         world_pts = world_pts[idx]
 
                     if self.t0 is None:

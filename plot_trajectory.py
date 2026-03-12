@@ -1609,12 +1609,44 @@ def plot_fig9_trajectory_pcl(df, csv_path, extra_trajectories=None):
     all_y = np.concatenate([y, [target_y]])
     margin = max(5, (all_x.max() - all_x.min()) * 0.2)
 
-    # 雷达散点
+    # 雷达散点 — 按高度着色 (如有3D数据)
     fx, fy = pcl_data['fx2d'], pcl_data['fy2d']
     n_scan_pts = len(fx)
     if n_scan_pts > 0:
-        ax1.scatter(fx, fy, s=4, c='black', alpha=0.6, zorder=2,
-                    edgecolors='none', label=f'雷达点云 ({n_scan_pts}点)')
+        # 尝试用 3D 点云数据 (有高度信息, 可着色)
+        pcl_pts_raw = load_pcl_points(csv_path)
+        if pcl_pts_raw is not None and len(pcl_pts_raw) > 0:
+            # 2D 栅格去重 (保留高度信息)
+            pox, poy, poz = pcl_pts_raw[:, 0], pcl_pts_raw[:, 1], pcl_pts_raw[:, 2]
+            grid_res_2d = 0.18 if len(pox) > 20000 else 0.15
+            pgx = np.round(pox / grid_res_2d).astype(int)
+            pgy = np.round(poy / grid_res_2d).astype(int)
+            seen_h = {}
+            for j in range(len(pox)):
+                key = (pgx[j], pgy[j])
+                # 每个 2D 格子保留最高点 (代表树冠高度)
+                if key not in seen_h or poz[j] > seen_h[key][2]:
+                    seen_h[key] = (pox[j], poy[j], poz[j])
+            if seen_h:
+                vv = np.array(list(seen_h.values()))
+                fx, fy, fz_2d = vv[:, 0], vv[:, 1], vv[:, 2]
+                n_scan_pts = len(fx)
+                from matplotlib.colors import LinearSegmentedColormap
+                tree_cmap_2d = LinearSegmentedColormap.from_list('tree2d', [
+                    '#5a3a10', '#3a6a2a', '#7acc50'])
+                z_lo_2d = max(np.percentile(fz_2d, 5), 0)
+                z_hi_2d = np.percentile(fz_2d, 95)
+                z_range_2d = max(z_hi_2d - z_lo_2d, 1.0)
+                z_norm_2d = np.clip((fz_2d - z_lo_2d) / z_range_2d, 0, 1)
+                ax1.scatter(fx, fy, s=6, c=z_norm_2d, cmap=tree_cmap_2d,
+                            alpha=0.65, zorder=2, edgecolors='none',
+                            label=f'障碍物 ({n_scan_pts}点, 按高度着色)')
+            else:
+                ax1.scatter(fx, fy, s=4, c='black', alpha=0.6, zorder=2,
+                            edgecolors='none', label=f'雷达点云 ({n_scan_pts}点)')
+        else:
+            ax1.scatter(fx, fy, s=4, c='black', alpha=0.6, zorder=2,
+                        edgecolors='none', label=f'雷达点云 ({n_scan_pts}点)')
 
     # 轨迹
     ax1.plot(x, y, '-', color='#333333', lw=2.5, alpha=0.6, zorder=3)
@@ -1659,13 +1691,78 @@ def plot_fig9_trajectory_pcl(df, csv_path, extra_trajectories=None):
     save_fig(fig, csv_path, '9_trajectory_pcl_2d')
 
 
+def _prepare_pcl_3d_forest(csv_path, df, grid_res=0.35, max_pts=6000, z_min=None):
+    """为 3D 点云图准备稀疏、按高度着色的点云数据
+    
+    与 _prepare_pcl_data 不同:
+      - 更大的栅格去重 (0.35m vs 0.08m)
+      - 限制最大点数 (保留离轨迹近的)
+      - 过滤地面点
+      - 返回高度信息用于着色
+    
+    Returns:
+        (ox, oy, oz) 或 None  —— 已去重、过滤、限数
+    """
+    pcl_pts = load_pcl_points(csv_path, z_min=z_min)
+    if pcl_pts is None or len(pcl_pts) == 0:
+        # fallback: 尝试 _lidar.npz
+        npz_path = csv_path.replace('.csv', '_lidar.npz')
+        if os.path.exists(npz_path):
+            result = lidar_to_world_xyz(npz_path)
+            if result is not None:
+                ox, oy, oz, _ = result
+                pcl_pts = np.column_stack([ox, oy, oz])
+            else:
+                return None
+        else:
+            return None
+
+    ox, oy, oz = pcl_pts[:, 0], pcl_pts[:, 1], pcl_pts[:, 2]
+
+    # 3D 栅格去重 (大栅格减密度)
+    gx = np.round(ox / grid_res).astype(int)
+    gy = np.round(oy / grid_res).astype(int)
+    gz = np.round(oz / grid_res).astype(int)
+    seen = {}
+    for j in range(len(ox)):
+        key = (gx[j], gy[j], gz[j])
+        if key not in seen:
+            seen[key] = (ox[j], oy[j], oz[j])
+    if not seen:
+        return None
+    vals = np.array(list(seen.values()))
+    ox, oy, oz = vals[:, 0], vals[:, 1], vals[:, 2]
+
+    # 如果点数仍然太多，保留离轨迹最近的
+    if len(ox) > max_pts:
+        traj_xy = np.column_stack([df['x'].values, df['y'].values])
+        pt_xy = np.column_stack([ox, oy])
+        # 对每个点云点，计算到轨迹最近点的距离
+        from scipy.spatial import cKDTree
+        tree = cKDTree(traj_xy)
+        dists, _ = tree.query(pt_xy)
+        # 保留最近的 max_pts 个
+        keep_idx = np.argsort(dists)[:max_pts]
+        ox, oy, oz = ox[keep_idx], oy[keep_idx], oz[keep_idx]
+
+    return ox, oy, oz
+
+
 def plot_fig10_trajectory_pcl_3d(df, csv_path, extra_trajectories=None):
-    """雷达点云轨迹图 (3D): 静态 PNG"""
+    """雷达点云轨迹图 (3D): 按高度着色，清晰显示树木结构"""
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-    pcl_data = _prepare_pcl_data(csv_path, df)
-    if pcl_data is None:
-        print("  ⊘ 无雷达/点云数据，跳过 3D 雷达点云图")
-        return
+
+    # 准备稀疏点云 (大栅格 + 限点数)
+    pcl_result = _prepare_pcl_3d_forest(csv_path, df, grid_res=0.35, max_pts=6000)
+    if pcl_result is None:
+        # 回退到原始方法
+        pcl_data = _prepare_pcl_data(csv_path, df)
+        if pcl_data is None:
+            print("  ⊘ 无雷达/点云数据，跳过 3D 雷达点云图")
+            return
+        fx3, fy3, fz3 = pcl_data['fx3d'], pcl_data['fy3d'], pcl_data['fz3d']
+    else:
+        fx3, fy3, fz3 = pcl_result
 
     x = df['x'].values; y = df['y'].values; z = df['z'].values
     speed = np.sqrt(df['vx_world']**2 + df['vy_world']**2 + df['vz_world']**2)
@@ -1676,18 +1773,42 @@ def plot_fig10_trajectory_pcl_3d(df, csv_path, extra_trajectories=None):
     fig = plt.figure(figsize=(12, 9))
     ax2 = fig.add_subplot(111, projection='3d')
 
-    # 3D 雷达散点
-    fx3, fy3, fz3 = pcl_data['fx3d'], pcl_data['fy3d'], pcl_data['fz3d']
+    # 3D 雷达散点 — 按高度着色 (低→深棕/高→翠绿, 模拟树干→树冠)
     if len(fx3) > 0:
-        ax2.scatter(fx3, fy3, fz3, s=3, c='dimgray', alpha=0.55, edgecolors='none',
-                    label=f'雷达点云 ({len(fx3)}点)')
+        z_lo = max(np.percentile(fz3, 5), 0)
+        z_hi = np.percentile(fz3, 95)
+        z_range = max(z_hi - z_lo, 1.0)
+
+        # 自定义 colormap: 棕色(树干) → 深绿 → 亮绿(树冠)
+        from matplotlib.colors import LinearSegmentedColormap
+        tree_cmap = LinearSegmentedColormap.from_list('tree', [
+            '#5a3a10',   # 深棕 (树干底部)
+            '#3a6a2a',   # 深绿 (中部)
+            '#7acc50',   # 亮绿 (树冠)
+        ])
+
+        z_norm = np.clip((fz3 - z_lo) / z_range, 0, 1)
+        # 点越高 alpha 越低 (树冠半透明, 不遮挡轨迹)
+        alpha_arr = 0.7 - 0.3 * z_norm  # 0.7(低) → 0.4(高)
+        # matplotlib 3D scatter 不支持逐点 alpha, 用固定 alpha + 颜色深浅模拟
+        ax2.scatter(fx3, fy3, fz3, s=4, c=z_norm, cmap=tree_cmap,
+                    alpha=0.5, edgecolors='none', depthshade=True,
+                    label=f'障碍物 ({len(fx3)}点, 按高度着色)')
+
+        # 高度色标
+        sm = plt.cm.ScalarMappable(cmap=tree_cmap,
+                                    norm=plt.Normalize(z_lo, z_hi))
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax2, shrink=0.5, pad=0.08, aspect=20)
+        cbar.set_label('高度 (m)', fontsize=9)
 
     # 3D 轨迹
+    speed_max = max(speed.max(), 0.1)
     for i in range(len(x) - 1):
         ax2.plot(x[i:i+2], y[i:i+2], z[i:i+2],
-                 color=plt.cm.coolwarm(speed.iloc[i] / max(speed.max(), 0.1)),
-                 lw=2.0, alpha=0.85)
-    ax2.plot(x, y, np.zeros_like(z), color='gray', alpha=0.2, lw=0.5)
+                 color=plt.cm.coolwarm(speed.iloc[i] / speed_max),
+                 lw=2.5, alpha=0.9)
+    ax2.plot(x, y, np.zeros_like(z), color='gray', alpha=0.15, lw=0.5)
 
     # 叠加其他方法轨迹
     _extra_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
@@ -1702,12 +1823,15 @@ def plot_fig10_trajectory_pcl_3d(df, csv_path, extra_trajectories=None):
                      color=ec, alpha=0.1, lw=0.5)
 
     # 起终目标
-    ax2.scatter(x[0], y[0], z[0], c='limegreen', s=80,
-                edgecolors='darkgreen', linewidths=2, zorder=5, label='起点')
-    ax2.scatter(x[-1], y[-1], z[-1], c='tomato', s=80, marker='s',
-                edgecolors='darkred', linewidths=2, zorder=5, label='终点')
-    ax2.scatter(target_x, target_y, target_z, c='gold', s=150, marker='*',
-                edgecolors='darkorange', linewidths=1.5, zorder=5, label='目标')
+    ax2.scatter(x[0], y[0], z[0], c='limegreen', s=100,
+                edgecolors='darkgreen', linewidths=2, zorder=10, label='起点',
+                depthshade=False)
+    ax2.scatter(x[-1], y[-1], z[-1], c='tomato', s=100, marker='s',
+                edgecolors='darkred', linewidths=2, zorder=10, label='终点',
+                depthshade=False)
+    ax2.scatter(target_x, target_y, target_z, c='gold', s=180, marker='*',
+                edgecolors='darkorange', linewidths=1.5, zorder=10, label='目标',
+                depthshade=False)
 
     # XY 范围限制在轨迹附近
     all_tx = np.concatenate([x, [target_x]])
@@ -1725,7 +1849,7 @@ def plot_fig10_trajectory_pcl_3d(df, csv_path, extra_trajectories=None):
     azim = np.degrees(np.arctan2(traj_dy, traj_dx)) - 135
     ax2.view_init(elev=30, azim=azim)
     ax2.set_xlabel('X (m)'); ax2.set_ylabel('Y (m)'); ax2.set_zlabel('Z (m)')
-    ax2.set_title('3D轨迹 + 雷达点云', fontsize=13)
+    ax2.set_title('3D轨迹 + 障碍物点云（按高度着色）', fontsize=13)
     ax2.legend(loc='upper left', fontsize=7, framealpha=0.8)
 
     plt.tight_layout()
