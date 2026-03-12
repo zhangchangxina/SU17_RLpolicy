@@ -71,7 +71,7 @@ WANDB_ENTITY="zhangchangxin"
 WANDB_PROJECT="UAV_Navigation"
 
 # 参数配置 - 目标点
-TARGET_X=40.0
+TARGET_X=0.0
 TARGET_Y=0.0
 TARGET_Z=1.2
 
