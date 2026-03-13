@@ -133,6 +133,14 @@ if [ "$CBF_TEST_MODE" = "true" ]; then
 fi
 
 # ============================================================
+# 目标点附近减速/悬停模式
+# none  = 不减速, 策略全程控制
+# decel = 线性减速 (XY 2m内衰减到0, 障碍物<2m取消减速)
+# hover = 悬停 (XY<1m悬停, 滞回1.5m退出, 障碍物<2m取消悬停)
+# ============================================================
+TARGET_STOP_MODE=hover
+
+# ============================================================
 # 调试选项 - 禁用雷达 (全部设为最大值 5m)
 # 用于测试策略是否能根据 pose_command 正确飞向目标
 # ============================================================
@@ -184,6 +192,7 @@ echo "  - 速度缩放: 水平=${SCALE_HOR}m/s, 垂直=${SCALE_Z}m/s"
 echo "  - 最大速度: 水平=${MAX_VEL_HOR}m/s, 上升=${MAX_VEL_UP}m/s, 下降=${MAX_VEL_DOWN}m/s"
 echo "  - 最大加速度: 水平=${MAX_ACC_HOR}m/s², 上升=${MAX_ACC_UP}m/s², 下降=${MAX_ACC_DOWN}m/s²"
 echo "  - CBF: use_cbf=${USE_CBF}, gamma=${CBF_GAMMA}, safe_dist=${CBF_SAFE_DIST}m, solver=${CBF_SOLVER}, barrier=${CBF_BARRIER}, repulsion=${CBF_REPULSION_DIST}m(gain=${CBF_REPULSION_GAIN})"
+echo "  - 目标停止模式: ${TARGET_STOP_MODE} (none/decel/hover)"
 echo "  - 雷达禁用: ${DISABLE_LIDAR}"
 echo "  - 测试模式: ${TEST_MODE}"
 echo "  - CBF测试模式: ${CBF_TEST_MODE} (action=[${CBF_TEST_ACTION_VX}, ${CBF_TEST_ACTION_VY}, ${CBF_TEST_ACTION_VZ}])"
@@ -218,6 +227,7 @@ python3 isaaclab_policy_node.py \
     _cbf_solver:=$CBF_SOLVER \
     _cbf_barrier:=$CBF_BARRIER \
     _cbf_repulsion_gain:=$CBF_REPULSION_GAIN \
+    _target_stop_mode:=$TARGET_STOP_MODE \
     _disable_lidar:=$DISABLE_LIDAR \
     _lidar_corr_roll:=$LIDAR_CORR_ROLL \
     _lidar_corr_pitch:=$LIDAR_CORR_PITCH \
