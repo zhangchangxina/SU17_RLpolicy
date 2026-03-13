@@ -1574,6 +1574,32 @@ class IsaacLabPolicyNode:
         else:
             cbf_vx, cbf_vy, cbf_vz = self._apply_mbcbf(vx, vy, vz, lidar)
         
+        # ---- 硬排斥力: 不论速度方向，距离 < repulsion_dist 就主动推开 ----
+        if self.cbf_repulsion_gain > 0 and min_lidar_dist < self.cbf_repulsion_dist:
+            with self.lock:
+                lidar_for_repulsion = self.lidar_data.copy()
+            
+            # 找最危险的方向 (取每个水平方向所有垂直通道的最小值)
+            dist_2d = lidar_for_repulsion.reshape(self.lidar_channels, self.lidar_horizontal_points)
+            min_dist_per_angle = np.min(dist_2d, axis=0)
+            danger_idx = np.argmin(min_dist_per_angle)
+            danger_dist = min_dist_per_angle[danger_idx]
+            
+            if danger_dist < self.cbf_repulsion_dist:
+                # 障碍物方向角 (与 Isaac Lab lidar 角度一致)
+                danger_angle = np.radians(-180 + danger_idx * 10.0)
+                obs_dir_x = np.cos(danger_angle)
+                obs_dir_y = np.sin(danger_angle)
+                
+                # 排斥力: 距离越近越大
+                repulsion = (self.cbf_repulsion_dist - danger_dist) * self.cbf_repulsion_gain
+                cbf_vx -= obs_dir_x * repulsion
+                cbf_vy -= obs_dir_y * repulsion
+                
+                rospy.logwarn_throttle(1.0,
+                    f"[CBF-REPULSION] dist={danger_dist:.2f}m < {self.cbf_repulsion_dist}m, "
+                    f"repulsion={repulsion:.2f}, angle={np.degrees(danger_angle):.0f}°")
+        
         # 计算 CBF 修正量
         dvx = cbf_vx - vx_in
         dvy = cbf_vy - vy_in
@@ -2306,21 +2332,15 @@ class IsaacLabPolicyNode:
                 min_obstacle_dist = np.min(self.lidar_data)
                 
                 decel_radius = 2.0   # 开始减速的XY距离 (m)
-                obs_safe_dist = 2.0  # 障碍物安全距离 (m), 小于此距离时线性恢复策略输出
-                if dist_xy < decel_radius:
-                    # 基于目标距离的减速因子: 2m→1.0, 0m→0.0
-                    target_scale = dist_xy / decel_radius
-                    
-                    # 基于障碍物距离的恢复因子: >=2m→0.0(不恢复), 0m→1.0(完全恢复)
-                    if min_obstacle_dist < obs_safe_dist:
-                        obs_restore = 1.0 - min_obstacle_dist / obs_safe_dist
-                    else:
-                        obs_restore = 0.0
-                    
-                    # 最终缩放: 障碍物越近, 越接近1.0(保持策略输出避障)
-                    speed_scale = target_scale + (1.0 - target_scale) * obs_restore
+                obs_cancel_dist = 2.0  # 障碍物小于此距离时, 取消减速, 策略全力输出
+                if dist_xy < decel_radius and min_obstacle_dist >= obs_cancel_dist:
+                    # 附近无障碍物, 正常减速
+                    speed_scale = dist_xy / decel_radius
                     action = action * speed_scale
-                    rospy.loginfo_throttle(2.0, f"[DECEL] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, t_scale={target_scale:.2f}, obs_restore={obs_restore:.2f}, final={speed_scale:.2f}")
+                    rospy.loginfo_throttle(2.0, f"[DECEL] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, scale={speed_scale:.2f}")
+                elif min_obstacle_dist < obs_cancel_dist:
+                    # 障碍物<2m, 取消减速, 策略原始输出避障
+                    rospy.loginfo_throttle(2.0, f"[OBS-OVERRIDE] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, 取消减速, 全力避障")
                 
                 # 发布控制命令
                 self.publish_command(action)
