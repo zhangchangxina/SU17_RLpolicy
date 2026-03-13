@@ -98,12 +98,12 @@ MAX_ACC_DOWN=2.0      # 最大下降加速度 (m/s²) - _UAV_ACC_DOWN
 # 参考: https://github.com/zhangchangxina/Naci_isaaclab/blob/main/run_play_mb.sh
 # ============================================================
 USE_CBF=true         # 是否启用 CBF 安全层 (CBF_TEST_MODE=true 时自动覆盖)
-CBF_SAFE_DIST=2.0       # Barrier 函数作用距离 (米), 进入此范围 barrier 值开始升高
+CBF_SAFE_DIST=3.0       # Barrier 函数作用距离 (米), 进入此范围 barrier 值开始升高
 CBF_SOLVER=gradient     # CBF 求解器: gradient=梯度投影(快,不严格), slsqp=严格QP求解(保证约束)
 CBF_BARRIER=reciprocal         # Barrier函数: log=对数(陡), softplus=平滑过渡(推荐), reciprocal=倒数
 CBF_GAMMA=""        # CBF gamma (留空=根据barrier类型自动选择推荐值)
-CBF_REPULSION_DIST=2.0    # 硬排斥触发距离 (米), 小于此距离施加紧急排斥力
-CBF_REPULSION_GAIN=0.7   # 硬排斥力增益 (0=关闭, 0.5=轻柔, 2.0=原始强度)
+CBF_REPULSION_DIST=3.0    # 硬排斥触发距离 (米), 小于此距离施加紧急排斥力
+CBF_REPULSION_GAIN=2.0   # 硬排斥力增益 (0=关闭, 0.5=轻柔, 2.0=原始强度)
                       #   手动设值会覆盖自动选择，越小越保守
 # 根据 barrier 类型自动设置推荐 gamma (不同barrier值域差异大)
 if [ -z "$CBF_GAMMA" ]; then
@@ -135,10 +135,10 @@ fi
 # ============================================================
 # 目标点附近减速/悬停模式
 # none  = 不减速, 策略全程控制
-# decel = 线性减速 (XY 2m内衰减到0, 障碍物<2m取消减速)
+# decel = 指数减速 (XY 1m内指数衰减, 先慢后快, 障碍物<2m取消减速)
 # hover = 悬停 (XY<1m悬停, 滞回1.5m退出, 障碍物<2m取消悬停)
 # ============================================================
-TARGET_STOP_MODE=hover
+TARGET_STOP_MODE=decel
 
 # ============================================================
 # 调试选项 - 禁用雷达 (全部设为最大值 5m)

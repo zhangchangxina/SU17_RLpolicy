@@ -237,7 +237,7 @@ class IsaacLabPolicyNode:
         
         # 目标点附近减速/悬停模式
         # none  = 不减速, 策略全程控制
-        # decel = 线性减速 (2m内衰减, 障碍物<2m取消减速)
+        # decel = 指数减速 (1m内指数衰减, 先慢后快, 障碍物<2m取消减速)
         # hover = 悬停 (XY<1m悬停, 滞回1.5m退出, 障碍物<2m取消悬停)
         self.target_stop_mode = rospy.get_param('~target_stop_mode', 'hover')
         rospy.loginfo(f"目标点停止模式: {self.target_stop_mode}")
@@ -1952,9 +1952,9 @@ class IsaacLabPolicyNode:
         
         target_direction_yaw = np.arctan2(dy, dx)  # 目标点方向（世界系）
         
-        # 目标2m内冻结yaw，避免近距离方向向量过短导致yaw抖动
+        # 目标1m内冻结yaw，避免近距离方向向量过短导致yaw抖动
         dist_xy_yaw = np.sqrt(dx**2 + dy**2)
-        if dist_xy_yaw < 2.0:
+        if dist_xy_yaw < 1.0:
             yaw_ref = 0.0  # 相对偏移=0，保持当前航向不变
         else:
             # yaw_ref = 目标yaw - 当前yaw（相对偏移）
@@ -2321,15 +2321,18 @@ class IsaacLabPolicyNode:
                 )
                 dist_to_target = np.sqrt(dist_xy**2 + (self.position[2] - self.target_z)**2)
                 min_obstacle_dist = np.min(self.lidar_data)
-                obs_cancel_dist = 2.0  # 障碍物小于此距离时, 取消减速/悬停
+                obs_cancel_dist = 3.0  # 障碍物小于此距离时, 取消减速/悬停
 
                 if self.target_stop_mode == 'decel':
-                    # 线性减速: XY 2m内线性衰减到0, 障碍物<2m取消减速
-                    decel_radius = 2.0
+                    # 指数减速: XY 1m内指数衰减到0, 先慢后快 (边界处平缓, 目标点附近急减)
+                    # 公式: scale = (1 - exp(-alpha*t)) / (1 - exp(-alpha)), t = dist/R
+                    decel_radius = 1.0
                     if dist_xy < decel_radius and min_obstacle_dist >= obs_cancel_dist:
-                        speed_scale = dist_xy / decel_radius
+                        t = dist_xy / decel_radius  # 归一化距离 [0, 1]
+                        alpha = 3.0  # 曲线参数: 越大边界越平缓, 目标附近越陡
+                        speed_scale = (1.0 - np.exp(-alpha * t)) / (1.0 - np.exp(-alpha))
                         action = action * speed_scale
-                        rospy.loginfo_throttle(2.0, f"[DECEL] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, scale={speed_scale:.2f}")
+                        rospy.loginfo_throttle(2.0, f"[DECEL-EXP] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, scale={speed_scale:.2f}")
                     elif min_obstacle_dist < obs_cancel_dist:
                         rospy.loginfo_throttle(2.0, f"[OBS-OVERRIDE] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, 取消减速, 全力避障")
 
