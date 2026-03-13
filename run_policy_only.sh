@@ -81,7 +81,7 @@ TARGET_Z=1.2
 WORLD_YAW_OFFSET=0.0  # world 和 world_enu 方向一致，不需要校正
 
 # 安全参数 (与 Isaac Lab 训练配置一致: velocity_env_cfg.py:213-221)
-MIN_ALTITUDE=1.0      # 最低飞行高度 (米)
+MIN_ALTITUDE=0.5      # 最低飞行高度 (米)
 # 速度限制
 SCALE_HOR=1.0         # 水平速度缩放 (m/s) - action=1 → 1m/s
 SCALE_Z=2.0           # 垂直速度缩放 (m/s) - action=1 → 2m/s
@@ -97,7 +97,7 @@ MAX_ACC_DOWN=2.0      # 最大下降加速度 (m/s²) - _UAV_ACC_DOWN
 # CBF 安全参数 (与 run_play_mb.sh 一致)
 # 参考: https://github.com/zhangchangxina/Naci_isaaclab/blob/main/run_play_mb.sh
 # ============================================================
-USE_CBF=false         # 是否启用 CBF 安全层 (CBF_TEST_MODE=true 时自动覆盖)
+USE_CBF=true         # 是否启用 CBF 安全层 (CBF_TEST_MODE=true 时自动覆盖)
 CBF_SAFE_DIST=2.0       # Barrier 函数作用距离 (米), 进入此范围 barrier 值开始升高
 CBF_SOLVER=gradient     # CBF 求解器: gradient=梯度投影(快,不严格), slsqp=严格QP求解(保证约束)
 CBF_BARRIER=reciprocal         # Barrier函数: log=对数(陡), softplus=平滑过渡(推荐), reciprocal=倒数

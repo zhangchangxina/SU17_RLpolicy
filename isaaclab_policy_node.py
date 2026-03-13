@@ -235,6 +235,13 @@ class IsaacLabPolicyNode:
             rospy.logwarn("[CBF-TEST] 如果 CBF 生效，输出速度会与固定动作不同")
             rospy.logwarn("="*60)
         
+        # 目标点附近减速/悬停模式
+        # none  = 不减速, 策略全程控制
+        # decel = 线性减速 (2m内衰减, 障碍物<2m取消减速)
+        # hover = 悬停 (XY<1m悬停, 滞回1.5m退出, 障碍物<2m取消悬停)
+        self.target_stop_mode = rospy.get_param('~target_stop_mode', 'hover')
+        rospy.loginfo(f"目标点停止模式: {self.target_stop_mode}")
+        
         # 动作符号修正 (如果策略输出方向相反)
         self.invert_vx = rospy.get_param('~invert_vx', False)
         self.invert_vy = rospy.get_param('~invert_vy', False)
@@ -291,13 +298,13 @@ class IsaacLabPolicyNode:
         self.velocity = np.zeros(3)      # vx, vy, vz
         self.orientation = np.zeros(4)   # qx, qy, qz, qw
         self.angular_vel = np.zeros(3)   # wx, wy, wz
-        self.lidar_data = np.zeros(self.lidar_num_rays)
+        self.lidar_data = np.full(self.lidar_num_rays, self.lidar_range)  # 初始化为最远距离(无障碍物)
         self.last_action = np.zeros(3)   # [vx, vy, vz] - 3维动作
         self.last_cmd_vel = np.zeros(3)  # 上一次发送的速度命令 [vx, vy, vz]
         self.last_cmd_time = None        # 上一次命令时间
         self.command_id = 0              # Prometheus 命令ID (需要递增)
         self.debug_counter = 0           # 调试计数器
-        self.is_hovering = False         # 悬停状态 (滞回: <1.5m进入, >3m退出)
+        self.is_hovering = False         # 悬停状态 (滞回: <1.0m进入, >1.5m退出, 障碍物<2m取消)
         self.height_protection = False   # 高度保护触发
         self.data_received = {
             'odom': False,
@@ -2307,7 +2314,7 @@ class IsaacLabPolicyNode:
                         rospy.loginfo(f"[DEBUG] 策略输出(原始): [{action_raw[0]:.3f}, {action_raw[1]:.3f}, {action_raw[2]:.3f}]")
                         rospy.loginfo(f"[DEBUG] 动作修正后: [{action[0]:.3f}, {action[1]:.3f}, {action[2]:.3f}] (invert_vx={self.invert_vx}, invert_vy={self.invert_vy})")
                 
-                # # [已注释] 到达目标点附近自动悬停 (滞回逻辑)
+                # # [已注释] 到达目标点附近自动悬停 (滞回逻辑, 3D距离)
                 # dist_to_target_3d = np.sqrt(
                 #     (self.position[0] - self.target_x)**2 +
                 #     (self.position[1] - self.target_y)**2 +
@@ -2323,24 +2330,60 @@ class IsaacLabPolicyNode:
                 # if self.is_hovering:
                 #     action = np.array([0.0, 0.0, 0.0])
 
-                # 目标点附近线性减速 (XY平面距离, 2m内线性衰减到0)
+                # # [已注释] 到达目标点附近自动悬停 (滞回逻辑, XY距离)
+                # dist_xy_hover = np.sqrt(
+                #     (self.position[0] - self.target_x)**2 +
+                #     (self.position[1] - self.target_y)**2
+                # )
+                # min_obstacle_dist_hover = np.min(self.lidar_data)
+                # if min_obstacle_dist_hover < 1.0:
+                #     self.is_hovering = False
+                # elif dist_xy_hover < 1.0:
+                #     self.is_hovering = True
+                # elif dist_xy_hover > 1.5:
+                #     self.is_hovering = False
+                # if self.is_hovering:
+                #     action = np.array([0.0, 0.0, 0.0])
+
+                # # [已注释] 目标点附近线性减速 (XY平面距离, 2m内线性衰减到0, 障碍物<2m取消减速)
+                # dist_xy = np.sqrt(
+                #     (self.position[0] - self.target_x)**2 +
+                #     (self.position[1] - self.target_y)**2
+                # )
+                # dist_to_target = np.sqrt(dist_xy**2 + (self.position[2] - self.target_z)**2)
+                # min_obstacle_dist = np.min(self.lidar_data)
+                # 
+                # decel_radius = 2.0   # 开始减速的XY距离 (m)
+                # obs_cancel_dist = 2.0  # 障碍物小于此距离时, 取消减速, 策略全力输出
+                # if dist_xy < decel_radius and min_obstacle_dist >= obs_cancel_dist:
+                #     # 附近无障碍物, 正常减速
+                #     speed_scale = dist_xy / decel_radius
+                #     action = action * speed_scale
+                #     rospy.loginfo_throttle(2.0, f"[DECEL] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, scale={speed_scale:.2f}")
+                # elif min_obstacle_dist < obs_cancel_dist:
+                #     # 障碍物<2m, 取消减速, 策略原始输出避障
+                #     rospy.loginfo_throttle(2.0, f"[OBS-OVERRIDE] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, 取消减速, 全力避障")
+
+                # 到达目标点附近自动悬停 (XY距离, 滞回逻辑, 障碍物<2m取消悬停)
                 dist_xy = np.sqrt(
                     (self.position[0] - self.target_x)**2 +
                     (self.position[1] - self.target_y)**2
                 )
                 dist_to_target = np.sqrt(dist_xy**2 + (self.position[2] - self.target_z)**2)
                 min_obstacle_dist = np.min(self.lidar_data)
-                
-                decel_radius = 2.0   # 开始减速的XY距离 (m)
-                obs_cancel_dist = 2.0  # 障碍物小于此距离时, 取消减速, 策略全力输出
-                if dist_xy < decel_radius and min_obstacle_dist >= obs_cancel_dist:
-                    # 附近无障碍物, 正常减速
-                    speed_scale = dist_xy / decel_radius
-                    action = action * speed_scale
-                    rospy.loginfo_throttle(2.0, f"[DECEL] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, scale={speed_scale:.2f}")
+
+                obs_cancel_dist = 2.0  # 障碍物小于此距离时取消悬停
+                if min_obstacle_dist < obs_cancel_dist:
+                    self.is_hovering = False
+                elif dist_xy < 1.0:
+                    self.is_hovering = True
+                elif dist_xy > 1.5:
+                    self.is_hovering = False
+                if self.is_hovering:
+                    action = np.array([0.0, 0.0, 0.0])
+                    rospy.loginfo_throttle(2.0, f"[HOVER] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, 悬停中")
                 elif min_obstacle_dist < obs_cancel_dist:
-                    # 障碍物<2m, 取消减速, 策略原始输出避障
-                    rospy.loginfo_throttle(2.0, f"[OBS-OVERRIDE] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, 取消减速, 全力避障")
+                    rospy.loginfo_throttle(2.0, f"[OBS-OVERRIDE] xy={dist_xy:.2f}m, obs={min_obstacle_dist:.2f}m, 取消悬停, 全力避障")
                 
                 # 发布控制命令
                 self.publish_command(action)
